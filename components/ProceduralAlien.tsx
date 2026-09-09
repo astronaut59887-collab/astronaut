@@ -26,6 +26,7 @@ export function ProceduralAlien({
     "--accent": character.appearance.accent,
     "--eye": character.appearance.eye,
   };
+  const { antennaStyle, badge, pattern, accessory, archetype } = character.appearance;
 
   return (
     <motion.div
@@ -37,30 +38,35 @@ export function ProceduralAlien({
       role="img"
     >
       <div className="alien-glow" />
-      <div className={`alien alien--${mood}`} style={style}>
-        <div className={`antennae antennae--${character.appearance.antennaStyle}`}>
-          <span /><span />
-        </div>
+      <div className={`alien alien--${mood} alien--${archetype} alien--pattern-${pattern}`} style={style}>
+        <div className={`antennae antennae--${antennaStyle}`}><span /><span /></div>
+        {accessory === "cape" && <div className="alien-cape" />}
         <div className="alien-ear alien-ear--left" />
         <div className="alien-ear alien-ear--right" />
         <div className="alien-body">
+          <div className="alien-pattern" />
           <div className="alien-face">
-            <div className="alien-eye"><i /></div>
-            <div className="alien-eye"><i /></div>
+            <div className="alien-eye"><i><b /></i></div>
+            <div className="alien-eye"><i><b /></i></div>
             <div className="alien-cheek alien-cheek--left" />
             <div className="alien-cheek alien-cheek--right" />
             <div className="alien-mouth" />
           </div>
           <div className="alien-belly">
-            <span className={`alien-badge alien-badge--${character.appearance.badge}`}>
-              {character.appearance.badge === "star" ? "✦" : character.appearance.badge === "moon" ? "☾" : "◉"}
+            <span className={`alien-badge alien-badge--${badge}`}>
+              {badge === "star" ? "✦" : badge === "moon" ? "☾" : "◉"}
             </span>
           </div>
         </div>
+        {accessory === "glasses" && <div className="alien-glasses"><span /><span /></div>}
+        {accessory === "satchel" && <div className="alien-satchel"><span /></div>}
         <div className="alien-arm alien-arm--left" />
         <div className="alien-arm alien-arm--right" />
         <div className="alien-foot alien-foot--left" />
         <div className="alien-foot alien-foot--right" />
+        {mood === "sleepy" && <div className="sleep-stars"><i>z</i><i>z</i><i>✦</i></div>}
+        {(mood === "excited" || mood === "surprised") && <div className="joy-sparks"><i>✦</i><i>✦</i><i>•</i></div>}
+        {mood === "angry" && <div className="anger-spark">⌁</div>}
       </div>
       <div className="alien-shadow" />
     </motion.div>

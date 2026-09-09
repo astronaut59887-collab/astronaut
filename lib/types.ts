@@ -4,9 +4,18 @@ export type CharacterMood =
   | "thinking"
   | "talking"
   | "happy"
+  | "excited"
   | "curious"
   | "sad"
+  | "sleepy"
+  | "shy"
+  | "angry"
+  | "surprised"
   | "confused";
+
+export type CharacterArchetype = "healer" | "trickster" | "sage" | "tsundere";
+export type InteractionMode = "chat" | "sleep" | "study" | "game";
+export type MessageFeedback = "love" | "funny" | "helpful" | "dislike";
 
 export type MemoryType =
   | "PROFILE"
@@ -32,6 +41,9 @@ export type CharacterAppearance = {
   eye: string;
   antennaStyle: "orb" | "leaf" | "double";
   badge: "star" | "moon" | "planet";
+  archetype: CharacterArchetype;
+  pattern: "plain" | "nebula" | "freckles" | "glow";
+  accessory: "none" | "cape" | "glasses" | "satchel";
 };
 
 export type Character = {
@@ -52,6 +64,8 @@ export type ChatMessage = {
   emotion?: CharacterMood;
   createdAt: string;
   referencedMemoryIds?: string[];
+  feedback?: MessageFeedback;
+  mode?: InteractionMode;
 };
 
 export type MemoryRecord = {
@@ -68,22 +82,34 @@ export type UserSettings = {
   memoryEnabled: boolean;
   autoPlayVoice: boolean;
   reducedMotion: boolean;
+  speechRate: number;
+  speechVolume: number;
+  notificationEnabled: boolean;
+  theme: "midnight" | "aurora";
 };
 
 export type Relationship = {
   firstMetAt: string;
   lastInteractionAt: string;
   activeDays: string[];
+  meaningfulInteractions: number;
+  completedMissions: string[];
+};
+
+export type DailyCheckIn = {
+  date: string;
+  mood: "great" | "okay" | "tired" | "low";
 };
 
 export type AppState = {
-  version: 1;
+  version: 2;
   profile: UserProfile | null;
   character: Character | null;
   messages: ChatMessage[];
   memories: MemoryRecord[];
   settings: UserSettings;
   relationship: Relationship | null;
+  checkIns: DailyCheckIn[];
 };
 
 export type CompanionReply = {
