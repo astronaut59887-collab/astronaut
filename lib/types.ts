@@ -16,6 +16,7 @@ export type CharacterMood =
 export type CharacterArchetype = "healer" | "trickster" | "sage" | "tsundere";
 export type InteractionMode = "chat" | "sleep" | "study" | "game";
 export type MessageFeedback = "love" | "funny" | "helpful" | "dislike";
+export type VoiceStyle = "neutral" | "warm" | "excited" | "soft";
 
 export type MemoryType =
   | "PROFILE"
@@ -66,6 +67,7 @@ export type ChatMessage = {
   referencedMemoryIds?: string[];
   feedback?: MessageFeedback;
   mode?: InteractionMode;
+  voiceStyle?: VoiceStyle;
 };
 
 export type MemoryRecord = {
@@ -116,6 +118,6 @@ export type CompanionReply = {
   text: string;
   emotion: CharacterMood;
   animation: CharacterMood;
-  voiceStyle: "neutral" | "warm" | "excited" | "soft";
+  voiceStyle: VoiceStyle;
   referencedMemoryIds: string[];
 };

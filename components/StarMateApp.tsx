@@ -43,6 +43,7 @@ import {
 import { currentGrowth } from "@/lib/progression";
 import { llmProvider } from "@/lib/providers";
 import { downloadState, EMPTY_STATE, loadState, saveState, STORAGE_KEY } from "@/lib/storage";
+import { stopVoicePlayback, voiceProvider } from "@/lib/voice-client";
 import type {
   AppState,
   Character,
@@ -50,7 +51,7 @@ import type {
   InteractionMode,
   MemoryRecord,
   MessageFeedback,
-  UserSettings,
+  VoiceStyle,
 } from "@/lib/types";
 import { CosmicRoom } from "@/components/CosmicRoom";
 import { GrowthPanel } from "@/components/GrowthPanel";
@@ -107,17 +108,6 @@ function greeting(name: string, lastActiveAt: string) {
   if (hour < 11) return "早呀。今天的地球看起来适合发生一点好事。";
   if (hour < 18) return `${name}，你回来啦。我刚刚在研究云为什么不会掉下来。`;
   return `晚上好，${name}。今天收集到什么地球故事了吗？`;
-}
-
-function speak(text: string, settings: UserSettings) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "zh-CN";
-  utterance.rate = settings.speechRate;
-  utterance.volume = settings.speechVolume;
-  utterance.pitch = 1.12;
-  window.speechSynthesis.speak(utterance);
 }
 
 function Onboarding({ onComplete }: { onComplete: (name: string, character: Character) => void }) {
@@ -193,6 +183,8 @@ export function StarMateApp() {
   const [activeMode, setActiveMode] = useState<InteractionMode>("chat");
   const messagesEnd = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const moodTimerRef = useRef<number | null>(null);
+  const voiceRunRef = useRef(0);
   const tapCount = useRef(0);
   const mission = useMemo(() => dailyMission(), []);
 
@@ -208,6 +200,11 @@ export function StarMateApp() {
   }, []);
   useEffect(() => { if (loaded) saveState(state); }, [state, loaded]);
   useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: state.settings.reducedMotion ? "auto" : "smooth" }); }, [state.messages, busy, state.settings.reducedMotion]);
+  useEffect(() => () => {
+    recognitionRef.current?.stop();
+    if (moodTimerRef.current !== null) window.clearTimeout(moodTimerRef.current);
+    stopVoicePlayback();
+  }, []);
 
   const navItems = useMemo(() => [
     { id: "home" as const, label: "舱室", icon: Home },
@@ -239,7 +236,35 @@ export function StarMateApp() {
   const todayCheckIn = state.checkIns.find((checkIn) => checkIn.date === localDateKey());
   const displayName = state.memories.find((memory) => memory.type === "PROFILE" && memory.content.startsWith("希望被叫作"))?.content.replace("希望被叫作", "") || profile.nickname;
 
+  const showMoodBriefly = (nextMood: CharacterMood, duration = 2200) => {
+    if (moodTimerRef.current !== null) window.clearTimeout(moodTimerRef.current);
+    setMood(nextMood);
+    moodTimerRef.current = window.setTimeout(() => setMood("idle"), duration);
+  };
+  const stopCurrentVoice = () => {
+    voiceRunRef.current += 1;
+    stopVoicePlayback();
+  };
+  const playVoice = (text: string, style: VoiceStyle, emotion: CharacterMood) => {
+    stopCurrentVoice();
+    const run = voiceRunRef.current;
+    void voiceProvider.speak({
+      text,
+      style,
+      emotion,
+      rate: state.settings.speechRate,
+      volume: state.settings.speechVolume,
+      onStart: () => { if (voiceRunRef.current === run) setMood("talking"); },
+      onEnd: () => { if (voiceRunRef.current === run) showMoodBriefly(emotion, 1200); },
+    }).then((played) => {
+      if (!played && voiceRunRef.current === run) showMoodBriefly(emotion);
+    }).catch(() => {
+      if (voiceRunRef.current === run) showMoodBriefly(emotion);
+    });
+  };
+
   const startListening = () => {
+    stopCurrentVoice();
     setVoiceNotice("");
     const speechWindow = window as SpeechWindow;
     const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
@@ -257,6 +282,8 @@ export function StarMateApp() {
   const submitMessage = async (rawText: string, mode: InteractionMode = activeMode) => {
     const text = rawText.trim();
     if (!text || busy) return;
+    stopCurrentVoice();
+    if (moodTimerRef.current !== null) window.clearTimeout(moodTimerRef.current);
     setInput(""); setBusy(true); setMood("thinking"); setVoiceNotice("");
     const now = new Date().toISOString();
     const userMessage = { id: crypto.randomUUID(), role: "user" as const, content: text, createdAt: now, mode };
@@ -271,11 +298,11 @@ export function StarMateApp() {
     setState(workingState);
     try {
       const reply = await llmProvider.generate({ message: text, profile: updatedProfile, character, memories: relevantMemories(updatedMemories, text), mode, relationshipLevel: growth.current.level });
-      const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: reply.text, emotion: reply.emotion, referencedMemoryIds: reply.referencedMemoryIds, createdAt: new Date().toISOString(), mode };
+      const assistantMessage = { id: crypto.randomUUID(), role: "assistant" as const, content: reply.text, emotion: reply.emotion, voiceStyle: reply.voiceStyle, referencedMemoryIds: reply.referencedMemoryIds, createdAt: new Date().toISOString(), mode };
       setMood(reply.animation);
       setState({ ...workingState, messages: [...workingState.messages, assistantMessage] });
-      if (state.settings.autoPlayVoice) speak(reply.text, state.settings);
-      window.setTimeout(() => setMood("idle"), 2600);
+      if (state.settings.autoPlayVoice) playVoice(reply.text, reply.voiceStyle, reply.animation);
+      else showMoodBriefly(reply.animation, 2600);
     } catch {
       setMood("confused");
       setState({ ...workingState, messages: [...workingState.messages, { id: crypto.randomUUID(), role: "assistant", content: "信号刚刚被一颗小行星撞歪了。可以再发一次吗？", emotion: "confused", createdAt: new Date().toISOString() }] });
@@ -286,18 +313,16 @@ export function StarMateApp() {
   const launchMode = (mode: InteractionMode, prompt: string) => { setActiveMode(mode); setView("chat"); void submitMessage(prompt, mode); };
   const reactToMessage = (messageId: string, feedback: MessageFeedback) => setState({ ...state, messages: state.messages.map((message) => message.id === messageId ? { ...message, feedback: message.feedback === feedback ? undefined : feedback } : message) });
   const checkIn = (moodValue: AppState["checkIns"][number]["mood"], characterMood: CharacterMood) => {
-    setMood(characterMood);
+    showMoodBriefly(characterMood);
     setState({ ...state, checkIns: [...state.checkIns.filter((item) => item.date !== localDateKey()), { date: localDateKey(), mood: moodValue }] });
-    window.setTimeout(() => setMood("idle"), 2200);
   };
   const completeMission = () => {
     if (missionComplete) return;
     setState({ ...state, relationship: { ...relationship, completedMissions: [...relationship.completedMissions, mission.id] }, character: { ...character, experience: character.experience + 12 } });
-    setMood("excited"); window.setTimeout(() => setMood("idle"), 2400);
+    showMoodBriefly("excited", 2400);
   };
   const tapCompanion = () => {
-    tapCount.current += 1; setMood(tapCount.current % 3 === 0 ? "happy" : "curious");
-    window.setTimeout(() => setMood("idle"), 1800);
+    tapCount.current += 1; showMoodBriefly(tapCount.current % 3 === 0 ? "happy" : "curious", 1800);
   };
   const updateMemory = (memory: MemoryRecord) => {
     const content = editingText.trim(); if (!content) return;
@@ -312,7 +337,7 @@ export function StarMateApp() {
   };
   const resetAccount = () => {
     if (!window.confirm("删除后，本地保存的对话和记忆都无法恢复。确定让飞船重新起航吗？")) return;
-    window.localStorage.removeItem(STORAGE_KEY); window.speechSynthesis?.cancel(); setState(EMPTY_STATE); setView("home");
+    window.localStorage.removeItem(STORAGE_KEY); stopCurrentVoice(); setState(EMPTY_STATE); setView("home");
   };
 
   return (
@@ -338,7 +363,7 @@ export function StarMateApp() {
               <div className="companion-zone">
                 <div className="speech-orbit"><span className="bubble-label">来自 {character.name}</span><p>{greeting(displayName, profile.lastActiveAt)}</p></div>
                 <button className="companion-touch" onClick={tapCompanion} aria-label={`和 ${character.name} 互动`}><ProceduralAlien character={character} mood={mood} /></button>
-                <div className="status-strip"><span><i className="status-dot" /> {mood === "listening" ? "正在听你说" : mood === "thinking" ? "正在想一想" : mood === "sleepy" ? "进入休眠模式" : "生命体征稳定"}</span><span>认识你第 {daysTogether(relationship.firstMetAt)} 天</span></div>
+                <div className="status-strip"><span><i className="status-dot" /> {mood === "listening" ? "正在听你说" : mood === "thinking" ? "正在想一想" : mood === "talking" ? "正在和你说话" : mood === "sleepy" ? "进入休眠模式" : "生命体征稳定"}</span><span>认识你第 {daysTogether(relationship.firstMetAt)} 天</span></div>
               </div>
               <div className="home-dock">
                 <section className="check-in-card"><p>今天的能量怎么样？</p><div>{[["great", "好", "excited"], ["okay", "稳", "happy"], ["tired", "累", "sleepy"], ["low", "低", "sad"]].map(([value, icon, visual]) => <button key={value} aria-label={`今天状态：${icon}`} className={todayCheckIn?.mood === value ? "active" : ""} onClick={() => checkIn(value as AppState["checkIns"][number]["mood"], visual as CharacterMood)}>{icon}</button>)}</div></section>
@@ -357,7 +382,7 @@ export function StarMateApp() {
                 {state.messages.map((message) => (
                   <div className={`message-row message-row--${message.role}`} key={message.id}>
                     {message.role === "assistant" && <div className="message-alien"><ProceduralAlien character={character} mood={message.emotion ?? "idle"} compact /></div>}
-                    <div className="message-stack"><div className="message-bubble"><p>{message.content}</p><time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div>{message.role === "assistant" && <div className="message-feedback">{feedbackItems.map(({ value, label, icon: Icon }) => <button key={value} className={message.feedback === value ? "active" : ""} onClick={() => reactToMessage(message.id, value)} aria-label={label} title={label}><Icon size={13} /></button>)}</div>}</div>
+                    <div className="message-stack"><div className="message-bubble"><p>{message.content}</p><time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div>{message.role === "assistant" && <div className="message-feedback"><button onClick={() => playVoice(message.content, message.voiceStyle ?? "warm", message.emotion ?? "happy")} aria-label="朗读回复" title="朗读回复"><Volume2 size={13} /></button>{feedbackItems.map(({ value, label, icon: Icon }) => <button key={value} className={message.feedback === value ? "active" : ""} onClick={() => reactToMessage(message.id, value)} aria-label={label} title={label}><Icon size={13} /></button>)}</div>}</div>
                   </div>
                 ))}
                 {busy && <div className="message-row message-row--assistant"><div className="message-alien"><ProceduralAlien character={character} mood="thinking" compact /></div><div className="typing-indicator"><i /><i /><i /></div></div>}<div ref={messagesEnd} />
@@ -383,7 +408,7 @@ export function StarMateApp() {
             <motion.div key="settings" className="panel-view settings-view" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <div className="view-header"><div className="view-icon"><Settings size={22} /></div><div><p className="eyebrow">FLIGHT CONFIGURATION</p><h1>飞船设置</h1></div></div>
               <section className="settings-section"><h2>你的宇宙搭子</h2><label className="text-setting"><span>伙伴名字</span><input maxLength={12} value={character.name} onChange={(event) => setState({ ...state, character: { ...character, name: event.target.value } })} /></label><div className="character-trait"><span style={{ background: character.appearance.body }} /><div><strong>{archetypeLabels[character.appearance.archetype].name} · {character.species}</strong><p>{archetypeLabels[character.appearance.archetype].description}</p></div></div></section>
-              <section className="settings-section"><h2>互动方式</h2><label className="setting-row"><div><strong>自动朗读回复</strong><p>使用浏览器内置语音，不会上传音频。</p></div><input type="checkbox" checked={state.settings.autoPlayVoice} onChange={(event) => setState({ ...state, settings: { ...state.settings, autoPlayVoice: event.target.checked } })} /><span className="toggle" /></label><label className="range-setting"><span>语速 <b>{state.settings.speechRate.toFixed(1)}×</b></span><input type="range" min="0.6" max="1.4" step="0.1" value={state.settings.speechRate} onChange={(event) => setState({ ...state, settings: { ...state.settings, speechRate: Number(event.target.value) } })} /></label><label className="range-setting"><span>音量 <b>{Math.round(state.settings.speechVolume * 100)}%</b></span><input type="range" min="0" max="1" step="0.1" value={state.settings.speechVolume} onChange={(event) => setState({ ...state, settings: { ...state.settings, speechVolume: Number(event.target.value) } })} /></label><label className="setting-row"><div><strong>减少动态效果</strong><p>减少漂浮、闪烁和页面过渡。</p></div><input type="checkbox" checked={state.settings.reducedMotion} onChange={(event) => setState({ ...state, settings: { ...state.settings, reducedMotion: event.target.checked } })} /><span className="toggle" /></label></section>
+              <section className="settings-section"><h2>互动方式</h2><label className="setting-row"><div><strong>自动朗读回复</strong><p>优先使用火山引擎角色语音，未配置或失败时自动使用浏览器语音。</p></div><input type="checkbox" checked={state.settings.autoPlayVoice} onChange={(event) => setState({ ...state, settings: { ...state.settings, autoPlayVoice: event.target.checked } })} /><span className="toggle" /></label><label className="range-setting"><span>语速 <b>{state.settings.speechRate.toFixed(1)}×</b></span><input type="range" min="0.6" max="1.4" step="0.1" value={state.settings.speechRate} onChange={(event) => setState({ ...state, settings: { ...state.settings, speechRate: Number(event.target.value) } })} /></label><label className="range-setting"><span>音量 <b>{Math.round(state.settings.speechVolume * 100)}%</b></span><input type="range" min="0" max="1" step="0.1" value={state.settings.speechVolume} onChange={(event) => setState({ ...state, settings: { ...state.settings, speechVolume: Number(event.target.value) } })} /></label><label className="setting-row"><div><strong>减少动态效果</strong><p>减少漂浮、闪烁和页面过渡。</p></div><input type="checkbox" checked={state.settings.reducedMotion} onChange={(event) => setState({ ...state, settings: { ...state.settings, reducedMotion: event.target.checked } })} /><span className="toggle" /></label></section>
               <section className="settings-section"><h2>陪伴与外观</h2><button className="setting-button" onClick={requestNotifications}>{state.settings.notificationEnabled ? <Bell size={18} /> : <BellOff size={18} />}<span><strong>陪伴通知</strong><small>{state.settings.notificationEnabled ? "已允许，未来可接入事件提醒" : "完全自愿，可随时关闭"}</small></span><ChevronRight size={17} /></button><label className="setting-row"><div><strong>极光主题</strong><p>为宇宙舱加入薄荷和粉色星云。</p></div><input type="checkbox" checked={state.settings.theme === "aurora"} onChange={(event) => setState({ ...state, settings: { ...state.settings, theme: event.target.checked ? "aurora" : "midnight" } })} /><span className="toggle" /></label>{voiceNotice && <p className="settings-notice">{voiceNotice}</p>}</section>
               <section className="settings-section"><h2>关于你的搭子</h2><div className="transparency-card"><ShieldCheck size={21} /><p><strong>{character.name} 是一个有外星伙伴设定的 AI。</strong>它不会声称自己拥有真实的人类意识。当前版本使用本地规则模型，未来可替换为其他 AI Provider。</p></div></section>
               <section className="settings-section"><h2>本地数据</h2><div className="data-actions"><button onClick={() => downloadState(state)}><Download size={18} /><span><strong>导出我的数据</strong><small>下载 JSON 格式副本</small></span><ChevronRight size={17} /></button><button className="danger-action" onClick={resetAccount}><RotateCcw size={18} /><span><strong>删除本地账户</strong><small>清除角色、对话与全部记忆</small></span><ChevronRight size={17} /></button></div></section>
